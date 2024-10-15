@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebRTC Sender</title>
+</head>
+  <h1>WebRTC Demo</h1>
+  <textarea id="messageInput" placeholder="Type a message"></textarea>
+  <button id="sendButton">Send Message</button>
+
+  <h2>Received Messages:</h2>
+  <div id="receivedMessages"></div>
+
+
+  <input id="targetIdIpt" placeholder="target ID" />
+  <button id="btn">Link</button>
+
+  <script>
+    const ws = new WebSocket('ws://127.0.0.1:3000/signaller');
+    let peerConnection;
+    let dataChannel;
+    let peerId;
+    let targetId;
+
+    const sendOffer = async (targetId) => {
+      peerConnection = createPeerConnection();
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      ws.send(JSON.stringify({ type: 'offer', peerId, targetId, payload: offer }));
+    }
+
+    const btn = document.querySelector('#btn');
+    btn.addEventListener('click', () => {
+      const targetId = document.querySelector('#targetIdIpt').value;
+      if (!targetId) {
+        alert('请输入目标ID');
+        return;
+      }
+      sendOffer(targetId);
+    });
+
+    ws.onmessage = async (event) => {
+      const data = JSON.parse(event.data);
+      console.log(data);
+
+      switch (data.type) {
+        case 'registered':
+          {
+            peerId = data.id;
+          }
+          break;
+        // 收到 offer
+        case 'offer':
+          {
+            targetId = data.peerId;
+            peerConnection = createPeerConnection(true);
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.payload));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            ws.send(JSON.stringify({ type: 'answer', peerId, targetId, payload: answer }));
+            document.querySelector('#btn').setAttribute('disabled', true);
+          }
+          break;
+        // 收到 answer
+        case 'answer':
+          {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.payload));
+          }
+          break;
+        case 'candidate':
+          {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(data.payload));
+          }
+          break;
+        default:
+          console.log('error: 未指定格式');
+      }
+    };
+
+    const createPeerConnection = (answer = false) => {
+      const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+      const dataChannelOptions = { ordered: true };
+      const pc = new RTCPeerConnection(configuration);
+
+      if (!answer) {
+        dataChannel = pc.createDataChannel('channel', dataChannelOptions);
+
+        dataChannel.onmessage = (event) => {
+          document.getElementById('receivedMessages').innerHTML += `<p>${event.data}</p>`;
+          console.log(event);
+        };
+
+        dataChannel.onopen = (e) => {
+          console.log(e, 'datachannel opened');
+        }
+      } else {
+        pc.ondatachannel = (event) => {
+          console.log('on data channel');
+          dataChannel = event.channel;
+
+          dataChannel.onmessage = (event) => {
+            document.getElementById('receivedMessages').innerHTML += `<p>${event.data}</p>`;
+          };
+
+          dataChannel.onopen = (e) => {
+            console.log(e, 'datachannel opened');
+          }
+        };
+      }
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          ws.send(JSON.stringify({ type: 'candidate', peerId, targetId, payload: event.candidate }));
+        }
+      };
+
+      return pc;
+    }
+
+    ws.addEventListener('open', async (e) => {
+      console.log('ws opened', e);
+    });
+
+    document.getElementById('sendButton').onclick = async () => {
+      console.log('3333', dataChannel)
+      dataChannel.send(document.getElementById('messageInput').value);
+    };
+  </script>
+</body>
+</html>
